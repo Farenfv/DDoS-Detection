@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Traffic Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <h1>Network Traffic Dashboard</h1>
+    <canvas id="trafficChart" width="400" height="200"></canvas>
+    <script>
+        async function fetchTrafficData() {
+            const response = await fetch('/traffic_data');
+            const data = await response.json();
+            return data;
+        }
+
+        async function updateChart(chart) {
+            const data = await fetchTrafficData();
+            const labels = Object.keys(data);
+            const values = labels.map(ip => data[ip]);
+
+            chart.data.labels = labels;
+            chart.data.datasets[0].data = values;
+            chart.update();
+        }
+
+        const ctx = document.getElementById('trafficChart').getContext('2d');
+        const trafficChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Number of Requests',
+                    data: [],
+                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                scales: {
+                    y: {
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+
+        setInterval(() => updateChart(trafficChart), 5000);
+    </script>
+</body>
+</html>
