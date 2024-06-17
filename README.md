@@ -1,16 +1,40 @@
-Requirements:
+DDoS Detection Program
+This repository contains a Python program for detecting potential DDoS (Distributed Denial of Service) attacks using network traffic analysis.
 
-Libraries: scapy, numpy, pandas
-Access to network traffic (could be via a packet capture file or real-time monitoring using tools like tcpdump)
+Features
+Real-time Packet Sniffing: Utilizes Scapy library to capture and analyze network traffic in real-time.
+Dynamic Thresholding: Uses statistical analysis (mean and standard deviation) to dynamically adjust detection thresholds.
+Web Dashboard: Provides a web-based dashboard (built with Flask and Chart.js) for visualizing network traffic data.
+Logging: Logs potential DDoS attack detections to a file for further analysis.
 
-Basic Steps:
+Getting Started
+To get started with the DDoS detection program, follow these steps:
 
-Capture Network Traffic: Use scapy or a similar tool to capture network traffic.
-Feature Extraction: Extract relevant features from the traffic data.
-Anomaly Detection: Implement an algorithm to detect anomalies in the traffic.
-Alert Mechanism: Notify or log when an anomaly is detected.
+Prerequisites
+Python 3.x installed on your system.
+Install required Python packages:
+
+pip install scapy numpy pandas flask
+
+Installation
+
+Clone the repository:
+git clone https://github.com/your-username/ddos-detection-python.git
+cd ddos-detection-python
+
+Run the program:
+python ddos_detection.py
 
 
-Access the Web Dashboard:
+Access the web dashboard:
+Open your web browser and go to http://localhost:5000
 
-Open your web browser and navigate to http://localhost:5000. You should see the network traffic dashboard. The bar chart will update every 5 seconds, showing the number of requests from different IP addresses.
+Usage
+The program starts sniffing network traffic upon execution.
+It continuously analyzes incoming traffic and detects potential DDoS attacks based on predefined thresholds.
+Detected events are logged in ddos_detection.log.
+The web dashboard updates every 5 seconds to display real-time traffic statistics.
+
+
+Contributing
+Contributions are welcome! If you have suggestions, feature requests, or want to report issues, please open an issue or submit a pull request.
