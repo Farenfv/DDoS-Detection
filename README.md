@@ -8,7 +8,7 @@ DDoS Detection Program
 This repository contains a Python program for detecting potential DDoS (Distributed Denial of Service) attacks using network traffic analysis.
 
 
-Features
+# Features
 
 Real-time Packet Sniffing: Utilizes Scapy library to capture and analyze network traffic 
 in real-time.
@@ -20,12 +20,12 @@ Web Dashboard: Provides a web-based dashboard (built with Flask and Chart.js) fo
 Logging: Logs potential DDoS attack detections to a file for further analysis.
 
 
-Getting Started
+# Getting Started
 
 To get started with the DDoS detection program, follow these steps:
 
 
-Prerequisites
+# Prerequisites
 
 Python 3.x installed on your system.
 
@@ -34,7 +34,7 @@ Install required Python packages:
 pip install scapy numpy pandas flask
 
 
-Installation
+# Installation
 
 Clone the repository:
 
@@ -43,19 +43,19 @@ git clone https://github.com/Farenfv/DDoS-Detection.git
 cd ddos-detection-python
 
 
-Run the program:
+# Run the program:
 
 python ddos_detection.py
 
 
 
-Access the web dashboard:
+# Access the web dashboard:
 
 Open your web browser and go to http://localhost:5000
 
 
 
-Usage
+# Usage
 
 The program starts sniffing network traffic upon execution.
 
@@ -67,7 +67,7 @@ The web dashboard updates every 5 seconds to display real-time traffic statistic
 
 
 
-Contributing
+# Contributing
 
 Contributions are welcome! If you have suggestions, feature requests, or want to report 
 issues, please open an issue or submit a pull request.
