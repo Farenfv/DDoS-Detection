@@ -19,7 +19,7 @@ pip install scapy numpy pandas flask
 Installation
 
 Clone the repository:
-git clone https://github.com/your-username/ddos-detection-python.git
+git clone https://github.com/Farenfv/DDoS-Detection.git
 cd ddos-detection-python
 
 Run the program:
