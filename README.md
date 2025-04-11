@@ -1,8 +1,6 @@
 
 # Project Title
 
-A brief description of what this project does and who it's for
-
 DDoS Detection Program
 
 This repository contains a Python program for detecting potential DDoS (Distributed Denial of Service) attacks using network traffic analysis.
