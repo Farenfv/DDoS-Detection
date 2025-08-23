@@ -1,54 +1,1035 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Network Traffic Dashboard</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-</head>
-<body>
-    <h1>Network Traffic Dashboard</h1>
-    <canvas id="trafficChart" width="400" height="200"></canvas>
-    <script>
-        async function fetchTrafficData() {
-            const response = await fetch('/traffic_data');
-            const data = await response.json();
-            return data;
-        }
+{% extends "base.html" %}
 
-        async function updateChart(chart) {
-            const data = await fetchTrafficData();
-            const labels = Object.keys(data);
-            const values = labels.map(ip => data[ip]);
+{% block title %}Dashboard - DDoS Detection{% endblock %}
 
-            chart.data.labels = labels;
-            chart.data.datasets[0].data = values;
-            chart.update();
-        }
+{% block content %}
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+    <!-- Stats Cards -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex items-center">
+            <div class="p-3 rounded-full bg-indigo-100 text-indigo-600">
+                <i class="mdi mdi-chart-line mdi-24px"></i>
+            </div>
+            <div class="ml-4">
+                <h3 class="text-gray-500 text-sm font-medium">Total Traffic</h3>
+                <p id="total-traffic" class="text-2xl font-semibold">0</p>
+            </div>
+        </div>
+    </div>
 
-        const ctx = document.getElementById('trafficChart').getContext('2d');
-        const trafficChart = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: [],
-                datasets: [{
-                    label: 'Number of Requests',
-                    data: [],
-                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
-                    borderColor: 'rgba(75, 192, 192, 1)',
-                    borderWidth: 1
-                }]
-            },
-            options: {
-                scales: {
-                    y: {
-                        beginAtZero: true
-                    }
+    <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex items-center">
+            <div class="p-3 rounded-full bg-red-100 text-red-600">
+                <i class="mdi mdi-shield-alert mdi-24px"></i>
+            </div>
+            <div class="ml-4">
+                <h3 class="text-gray-500 text-sm font-medium">Active Threats</h3>
+                <p id="active-threats" class="text-2xl font-semibold">0</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex items-center">
+            <div class="p-3 rounded-full bg-yellow-100 text-yellow-600">
+                <i class="mdi mdi-shield-lock mdi-24px"></i>
+            </div>
+            <div class="ml-4">
+                <h3 class="text-gray-500 text-sm font-medium">Blocked IPs</h3>
+                <p id="blocked-ips" class="text-2xl font-semibold">0</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex items-center">
+            <div class="p-3 rounded-full bg-blue-100 text-blue-600">
+                <i class="mdi mdi-account-network mdi-24px"></i>
+            </div>
+            <div class="ml-4">
+                <h3 class="text-gray-500 text-sm font-medium">Active Connections</h3>
+                <p id="active-connections" class="text-2xl font-semibold">0</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex items-center">
+            <div class="p-3 rounded-full bg-green-100 text-green-600">
+                <i class="mdi mdi-shield-check mdi-24px"></i>
+            </div>
+            <div class="ml-4">
+                <h3 class="text-gray-500 text-sm font-medium">Monitoring Status</h3>
+                <p id="monitoring-status" class="text-lg font-semibold text-green-600">Active</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+    <!-- Traffic Chart -->
+    <div class="bg-white rounded-lg shadow p-6 lg:col-span-2">
+        <h3 class="text-lg font-medium mb-4">Network Traffic</h3>
+        <div class="h-80">
+            <canvas id="trafficChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Recent Alerts -->
+    <div class="bg-white rounded-lg shadow overflow-hidden">
+        <div class="px-6 py-4 border-b border-gray-200">
+            <h3 class="text-lg font-medium">Recent Alerts</h3>
+        </div>
+        <div id="recent-alerts" class="divide-y divide-gray-200 max-h-96 overflow-y-auto">
+            <!-- Alerts will be inserted here -->
+            <div class="p-4 text-center text-gray-500">
+                No recent alerts
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Top IPs Table -->
+<div class="bg-white rounded-lg shadow overflow-hidden">
+                <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+                <h3 class="text-lg font-medium">Active Connections</h3>
+                <div class="flex items-center space-x-4">
+                    <div class="text-sm text-gray-500">
+                        <span id="active-connections">0</span> active connections
+                    </div>
+                    <button id="generate-traffic-btn" onclick="generateTestTraffic()" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded text-sm">
+                        Generate Test Traffic
+                    </button>
+                    <button id="start-real-monitoring-btn" onclick="startRealMonitoring()" class="bg-orange-500 hover:bg-orange-700 text-white font-bold py-2 px-4 rounded text-sm">
+                        Start Real Monitoring
+                    </button>
+                    <button id="clear-traffic-btn" onclick="clearTraffic()" class="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded text-sm">
+                        Clear Traffic
+                    </button>
+                    <button id="restart-monitoring-btn" onclick="restartMonitoring()" class="bg-indigo-500 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded text-sm">
+                        Restart Monitoring
+                    </button>
+                    <button id="refresh-btn" onclick="refreshData()" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded text-sm">
+                        Refresh Data
+                    </button>
+                    <button id="status-btn" onclick="checkStatus()" class="bg-purple-500 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded text-sm">
+                        Check Status
+                    </button>
+                    <button id="system-info-btn" onclick="showSystemInfo()" class="bg-gray-500 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded text-sm">
+                        System Info
+                    </button>
+                    <button id="help-btn" onclick="showHelp()" class="bg-teal-500 hover:bg-teal-700 text-white font-bold py-2 px-4 rounded text-sm">
+                        Help
+                    </button>
+                </div>
+            </div>
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IP Address</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Requests</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rate (req/s)</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Seen</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="connections-table" class="bg-white divide-y divide-gray-200">
+                <!-- Rows will be inserted here -->
+                <tr>
+                    <td colspan="5" class="px-6 py-4 text-center text-gray-500">No active connections</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Global variables
+const connections = new Map();
+const trafficData = [];
+const MAX_DATA_POINTS = 30;
+let trafficChart = null;
+let alertCount = 0; // Track number of alerts
+
+// Initialize charts
+function initializeCharts() {
+    const trafficCtx = document.getElementById('trafficChart');
+    if (!trafficCtx) return;
+    
+    const config = {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Requests per second',
+                data: [],
+                borderColor: 'rgba(79, 70, 229, 1)',
+                backgroundColor: 'rgba(79, 70, 229, 0.1)',
+                borderWidth: 2,
+                tension: 0.3,
+                fill: true
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    grid: { display: true, drawBorder: false },
+                    ticks: { precision: 0 }
+                },
+                x: {
+                    grid: { display: false, drawBorder: false }
                 }
+            },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false
+                }
+            },
+            elements: { point: { radius: 0 } },
+            interaction: {
+                mode: 'nearest',
+                axis: 'x',
+                intersect: false
+            }
+        }
+    };
+    
+    trafficChart = new Chart(trafficCtx.getContext('2d'), config);
+}
+
+// Handle traffic updates from the base template
+window.handleTrafficUpdate = function(data) {
+    try {
+        console.log('Received traffic update:', data);
+        if (!data || !data.ip) {
+            console.warn('Invalid traffic update data:', data);
+            return;
+        }
+        updateTrafficChart(data);
+        updateConnectionsTable(data);
+    } catch (e) {
+        console.error('Error handling traffic update:', e);
+    }
+};
+
+// Handle system stats updates
+window.handleSystemStats = function(data) {
+    try {
+        console.log('Received system stats:', data);
+        if (!data) {
+            console.warn('Received empty system stats data');
+            return;
+        }
+        console.log('Updating stats with data:', data);
+        updateStats(data);
+        
+        // Also update the active connections count in the table header
+        const tableHeaderCount = document.querySelector('#active-connections');
+        if (tableHeaderCount && typeof data.active_connections !== 'undefined') {
+            tableHeaderCount.textContent = data.active_connections;
+        }
+    } catch (e) {
+        console.error('Error handling system stats:', e);
+    }
+};
+
+// Update traffic chart with new data
+function updateTrafficChart(data) {
+    if (!trafficChart) return;
+    
+    const now = new Date();
+    const timeLabel = now.toLocaleTimeString();
+    
+    // Add new data point
+    trafficData.push({
+        time: timeLabel,
+        rate: data.request_rate || 0,
+        ip: data.ip,
+        timestamp: data.timestamp
+    });
+    
+    // Keep only the last MAX_DATA_POINTS
+    if (trafficData.length > MAX_DATA_POINTS) {
+        trafficData.shift();
+    }
+    
+    // Update chart data
+    trafficChart.data.labels = trafficData.map(d => d.time);
+    trafficChart.data.datasets[0].data = trafficData.map(d => d.rate);
+    
+    // Force chart update
+    trafficChart.update('active');
+    
+    console.log(`Chart updated: ${data.ip} - ${data.request_rate} req/s`);
+    console.log(`Chart now has ${trafficData.length} data points`);
+}
+
+// Update connections table
+function updateConnectionsTable(data) {
+    if (!data || !data.ip) return;
+    
+    const now = new Date();
+    connections.set(data.ip, {
+        requestCount: data.request_count || 0,
+        requestRate: (data.request_rate || 0).toFixed(2),
+        lastSeen: now.toLocaleTimeString(),
+        timestamp: data.timestamp || now.getTime()
+    });
+    
+    console.log(`Updated connections table for ${data.ip}:`, connections.get(data.ip));
+    console.log(`Total connections: ${connections.size}`);
+    
+    // Show notification for new traffic
+    showTrafficNotification(data);
+    
+    renderConnectionsTable();
+}
+
+// Render the connections table
+function renderConnectionsTable() {
+    const tbody = document.getElementById('connections-table');
+    if (!tbody) return;
+    
+    tbody.innerHTML = '';
+    
+    if (connections.size === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="5" class="px-6 py-4 text-center text-gray-500">No active connections</td>
+            </tr>`;
+        return;
+    }
+    
+    // Convert to array and sort by request count (descending)
+    const sortedConnections = Array.from(connections.entries())
+        .sort((a, b) => b[1].requestCount - a[1].requestCount);
+    
+    sortedConnections.forEach(([ip, stats]) => {
+        const row = document.createElement('tr');
+        row.className = 'hover:bg-gray-50';
+        row.innerHTML = `
+            <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900">${ip}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${stats.requestCount.toLocaleString()}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${stats.requestRate}/s</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${stats.lastSeen}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                <button onclick="blockIP('${ip}')" class="text-red-600 hover:text-red-900">Block</button>
+            </td>`;
+        tbody.appendChild(row);
+    });
+    
+    updateActiveConnectionsCount();
+}
+
+// Update the active connections count
+function updateActiveConnectionsCount() {
+    const countElement = document.getElementById('active-connections');
+    if (countElement) {
+        countElement.textContent = connections.size;
+    }
+}
+
+// Initialize connections map if it doesn't exist
+if (!window.connections) {
+    window.connections = new Map();
+}
+
+// Update stats cards
+function updateStats(stats = {}) {
+    try {
+        // Calculate total traffic
+        let totalTraffic = 0;
+        if (window.connections) {
+            window.connections.forEach(conn => {
+                totalTraffic += parseInt(conn.requestCount || 0);
+            });
+        }
+        
+        // Update UI elements if they exist
+        const totalTrafficEl = document.getElementById('total-traffic');
+        const activeThreatsEl = document.getElementById('active-threats');
+        const blockedIpsEl = document.getElementById('blocked-ips');
+        const activeConnectionsEl = document.getElementById('active-connections');
+        
+        if (totalTrafficEl) totalTrafficEl.textContent = totalTraffic.toLocaleString();
+        if (activeThreatsEl) activeThreatsEl.textContent = window.alertCount || 0;
+        if (blockedIpsEl) blockedIpsEl.textContent = (stats && stats.blocked_ips) ? stats.blocked_ips : 0;
+        if (activeConnectionsEl) {
+            // Use server data if available, otherwise fall back to local connections count
+            const activeConnections = (stats && typeof stats.active_connections !== 'undefined') 
+                ? stats.active_connections 
+                : (window.connections ? window.connections.size : 0);
+            activeConnectionsEl.textContent = activeConnections;
+        }
+        
+        console.log('Updated stats:', { 
+            totalTraffic, 
+            alertCount: window.alertCount || 0, 
+            blockedIps: (stats && stats.blocked_ips) ? stats.blocked_ips : 0,
+            activeConnections: (stats && typeof stats.active_connections !== 'undefined') 
+                ? stats.active_connections 
+                : (window.connections ? window.connections.size : 0)
+        });
+        
+    } catch (e) {
+        console.error('Error in updateStats:', e);
+    }
+}
+
+// Block IP address
+function blockIP(ip) {
+    if (!ip) return;
+    
+    fetch(`/api/block-ip/${encodeURIComponent(ip)}`, { 
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            alert(`Successfully blocked IP: ${ip}`);
+            // Remove from connections table
+            connections.delete(ip);
+            renderConnectionsTable();
+        } else {
+            alert(`Failed to block IP: ${data.message || 'Unknown error'}`);
+        }
+    })
+    .catch(error => {
+        console.error('Error blocking IP:', error);
+        alert('Error blocking IP. Please check the console for details.');
+    });
+}
+
+// Generate test traffic
+function generateTestTraffic() {
+    const btn = document.getElementById('generate-traffic-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Generating...';
+    }
+    
+    fetch('/api/generate-test-traffic', { 
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            console.log('Test traffic generated:', data);
+            showSuccessNotification(`Generated test traffic for ${data.ips.length} IP addresses`);
+            // The traffic will be processed by the background thread and updates will come via WebSocket
+        } else {
+            console.error('Failed to generate test traffic:', data.message);
+            showFailureNotification('Failed to generate test traffic');
+        }
+    })
+    .catch(error => {
+        console.error('Error generating test traffic:', error);
+        showFailureNotification('Error generating test traffic. Check console for details.');
+    })
+    .finally(() => {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Generate Test Traffic';
+        }
+    });
+}
+
+// Start real network monitoring
+function startRealMonitoring() {
+    const btn = document.getElementById('start-real-monitoring-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Starting...';
+    }
+    
+    showStartingNotification('Attempting to start real network monitoring...');
+    
+    fetch('/api/start-real-monitoring', { 
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            console.log('Real monitoring started:', data);
+            showSuccessNotification(data.message);
+            // Update monitoring status
+            updateMonitoringStatus({
+                active_connections: 0,
+                background_threads: { sniffing_thread: true }
+            });
+        } else if (data.status === 'warning') {
+            console.warn('Real monitoring warning:', data);
+            showFailureNotification(data.message);
+        } else {
+            console.error('Failed to start real monitoring:', data.message);
+            showFailureNotification('Failed to start real monitoring');
+        }
+    })
+    .catch(error => {
+        console.error('Error starting real monitoring:', error);
+        showFailureNotification('Error starting real monitoring. Check console for details.');
+    })
+    .finally(() => {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Start Real Monitoring';
+        }
+    });
+}
+
+// Clear all traffic data
+function clearTraffic() {
+    const btn = document.getElementById('clear-traffic-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Clearing...';
+    }
+    
+    showStartingNotification('Clearing all traffic data...');
+    
+    fetch('/api/clear-traffic', { 
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            console.log('Traffic cleared:', data);
+            showSuccessNotification(data.message);
+            
+            // Clear local connections
+            renderConnectionsTable();
+            
+            // Update monitoring status
+            updateMonitoringStatus({
+                active_connections: 0,
+                background_threads: { sniffing_thread: false }
+            });
+        } else {
+            console.error('Failed to clear traffic:', data.message);
+            showFailureNotification('Failed to clear traffic data');
+        }
+    })
+    .catch(error => {
+        console.error('Error clearing traffic:', error);
+        showFailureNotification('Error clearing traffic data. Check console for details.');
+    })
+    .finally(() => {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Clear Traffic';
+        }
+    });
+}
+
+// Restart monitoring system
+function restartMonitoring() {
+    const btn = document.getElementById('restart-monitoring-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Restarting...';
+    }
+    
+    showStartingNotification('Restarting monitoring system...');
+    
+    fetch('/api/restart-monitoring', { 
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            console.log('Monitoring restarted:', data);
+            showSuccessNotification(data.message);
+            
+            // Clear local connections
+            connections.clear();
+            renderConnectionsTable();
+            
+            // Update monitoring status
+            updateMonitoringStatus({
+                active_connections: 0,
+                background_threads: { sniffing_thread: true }
+            });
+        } else {
+            console.error('Failed to restart monitoring:', data.message);
+            showFailureNotification('Failed to restart monitoring');
+        }
+    })
+    .catch(error => {
+        console.error('Error restarting monitoring:', error);
+        showFailureNotification('Error restarting monitoring. Check console for details.');
+    })
+    .finally(() => {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Restart Monitoring';
+        }
+    });
+}
+
+// Show system information
+function showSystemInfo() {
+    const btn = document.getElementById('system-info-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Loading...';
+    }
+    
+    fetch('/api/system-info')
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                console.log('System info:', data.system_info);
+                
+                // Format system info for display
+                const info = data.system_info;
+                let infoMessage = `System Information:\n\n`;
+                infoMessage += `Platform: ${info.platform} ${info.platform_version}\n`;
+                infoMessage += `Machine: ${info.machine}\n`;
+                infoMessage += `Processor: ${info.processor}\n`;
+                infoMessage += `Python: ${info.python_version}\n`;
+                infoMessage += `CPU Cores: ${info.cpu_count}\n`;
+                infoMessage += `Memory: ${Math.round(info.memory_available / 1024 / 1024 / 1024 * 100) / 100} GB available of ${Math.round(info.memory_total / 1024 / 1024 / 1024 * 100) / 100} GB\n`;
+                infoMessage += `Disk Usage: ${info.disk_usage}%\n`;
+                infoMessage += `Network Interfaces: ${info.network_interfaces.join(', ')}`;
+                
+                alert(infoMessage);
+            } else {
+                console.error('Failed to get system info:', data.message);
+                showFailureNotification('Failed to get system information');
+            }
+        })
+        .catch(error => {
+            console.error('Error getting system info:', error);
+            showFailureNotification('Error getting system information. Check console for details.');
+        })
+        .finally(() => {
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = 'System Info';
             }
         });
+}
 
-        setInterval(() => updateChart(trafficChart), 5000);
-    </script>
-</body>
-</html>
+// Show help information
+function showHelp() {
+    const helpMessage = `DDoS Detection System - Help
+
+📊 Dashboard Features:
+• Real-time traffic monitoring
+• Interactive charts and statistics
+• IP connection management
+• System status indicators
+
+🔧 Available Actions:
+• Generate Test Traffic: Creates simulated network activity
+• Start Real Monitoring: Attempts real packet capture (requires admin)
+• Clear Traffic: Removes all current traffic data
+• Restart Monitoring: Restarts the monitoring system
+• Refresh Data: Reconnects and gets fresh data
+• Check Status: Shows detailed system health
+• System Info: Displays system specifications
+• Help: Shows this help message
+
+💡 Tips:
+• Run as Administrator for real network monitoring
+• Use test traffic to see the system in action
+• Check browser console for detailed logs
+• Monitor the status indicators for system health
+
+🆘 Troubleshooting:
+• If no traffic appears, click "Generate Test Traffic"
+• For real monitoring, run as Administrator
+• Check the "Check Status" button for system health
+• Use "Restart Monitoring" if issues occur`;
+    
+    alert(helpMessage);
+}
+
+// Refresh data from server
+function refreshData() {
+    const btn = document.getElementById('refresh-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Refreshing...';
+    }
+    
+    // Request fresh data from server
+    if (window.socket && window.socket.connected) {
+        window.socket.emit('get_initial_data');
+        console.log('Requested fresh data from server');
+        showStartingNotification('Refreshing data from server...');
+    } else {
+        console.warn('Socket not connected, cannot refresh data');
+        showFailureNotification('Socket not connected. Please refresh the page.');
+    }
+    
+    // Re-enable button after a short delay
+    setTimeout(() => {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Refresh Data';
+        }
+    }, 1000);
+}
+
+// Check system status
+function checkStatus() {
+    const btn = document.getElementById('status-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Checking...';
+    }
+    
+    fetch('/status')
+        .then(response => response.json())
+        .then(data => {
+            console.log('System status:', data);
+            
+            // Update monitoring status display
+            updateMonitoringStatus(data);
+            
+            // Show status in a more user-friendly way
+            showStatusNotification(data);
+            
+            // Show success notification if monitoring is working
+            if (data.active_connections > 0 || data.background_threads.sniffing_thread) {
+                showSuccessNotification('System status check completed successfully');
+            }
+        })
+        .catch(error => {
+            console.error('Error checking status:', error);
+            showFailureNotification('Error checking system status. Check console for details.');
+        })
+        .finally(() => {
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = 'Check Status';
+            }
+        });
+}
+
+// Update monitoring status display
+function updateMonitoringStatus(data) {
+    const statusElement = document.getElementById('monitoring-status');
+    if (!statusElement) return;
+    
+    let previousStatus = statusElement.textContent;
+    
+    if (data.active_connections > 0) {
+        statusElement.textContent = 'Active';
+        statusElement.className = 'text-lg font-semibold text-green-600';
+        
+        // Show success notification if status changed to active
+        if (previousStatus !== 'Active') {
+            showSuccessNotification('Network monitoring is now active! Traffic detected.');
+        }
+    } else if (data.background_threads.sniffing_thread) {
+        statusElement.textContent = 'Monitoring';
+        statusElement.className = 'text-lg font-semibold text-blue-600';
+    } else {
+        statusElement.textContent = 'Inactive';
+        statusElement.className = 'text-lg font-semibold text-red-600';
+        
+        // Show failure notification if status changed to inactive
+        if (previousStatus !== 'Inactive') {
+            showFailureNotification('Network monitoring is inactive. Check system status.');
+        }
+    }
+}
+
+// Start monitoring automatically
+function startMonitoring() {
+    console.log('Attempting to start monitoring automatically...');
+    
+    // Show starting notification
+    showStartingNotification();
+    
+    // First try to generate some test traffic
+    generateTestTraffic();
+    
+    // Then check status after a delay
+    setTimeout(() => {
+        checkStatus();
+    }, 2000);
+}
+
+// Show status notification
+function showStatusNotification(data) {
+    // Create or update status notification
+    let notification = document.getElementById('status-notification');
+    if (!notification) {
+        notification = document.createElement('div');
+        notification.id = 'status-notification';
+        notification.className = 'fixed top-4 right-4 w-80 bg-white rounded-lg shadow-lg border-l-4 border-blue-500 z-50';
+        document.body.appendChild(notification);
+    }
+    
+    const status = data.active_connections > 0 ? 'Active' : 
+                  data.background_threads.sniffing_thread ? 'Monitoring' : 'Inactive';
+    
+    const statusColor = data.active_connections > 0 ? 'text-green-600' : 
+                       data.background_threads.sniffing_thread ? 'text-blue-600' : 'text-red-600';
+    
+    notification.innerHTML = `
+        <div class="p-4">
+            <div class="flex items-center justify-between">
+                <h3 class="text-lg font-medium text-gray-900">System Status</h3>
+                <button onclick="this.parentElement.parentElement.parentElement.remove()" class="text-gray-400 hover:text-gray-500">
+                    <i class="mdi mdi-close text-xl"></i>
+                </button>
+            </div>
+            <div class="mt-2 space-y-2">
+                <div class="flex justify-between">
+                    <span class="text-sm text-gray-500">Status:</span>
+                    <span class="text-sm font-medium ${statusColor}">${status}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-sm text-gray-500">Active Connections:</span>
+                    <span class="text-sm font-medium">${data.active_connections}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-sm text-gray-500">Total Packets:</span>
+                    <span class="text-sm font-medium">${data.total_packets}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-sm text-gray-500">Network Interface:</span>
+                    <span class="text-sm font-medium">${data.network_interface}</span>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Auto-hide after 10 seconds
+    setTimeout(() => {
+        if (notification && notification.parentElement) {
+            notification.remove();
+        }
+    }, 10000);
+}
+
+// Show failure notification
+function showFailureNotification(message) {
+    let notification = document.createElement('div');
+    notification.className = 'fixed top-4 left-4 w-80 bg-white rounded-lg shadow-lg border-l-4 border-red-500 z-50';
+    
+    notification.innerHTML = `
+        <div class="p-4">
+            <div class="flex items-center">
+                <div class="flex-shrink-0">
+                    <i class="mdi mdi-alert-circle text-red-500 text-xl"></i>
+                </div>
+                <div class="ml-3">
+                    <h3 class="text-lg font-medium text-gray-900">Warning</h3>
+                    <p class="text-sm text-gray-500">${message}</p>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(notification);
+    
+    // Auto-hide after 8 seconds
+    setTimeout(() => {
+        if (notification && notification.parentElement) {
+            notification.remove();
+        }
+    }, 8000);
+}
+
+// Show success notification
+function showSuccessNotification(message) {
+    let notification = document.createElement('div');
+    notification.className = 'fixed top-4 left-4 w-80 bg-white rounded-lg shadow-lg border-l-4 border-green-500 z-50';
+    
+    notification.innerHTML = `
+        <div class="p-4">
+            <div class="flex items-center">
+                <div class="flex-shrink-0">
+                    <i class="mdi mdi-check-circle text-green-500 text-xl"></i>
+                </div>
+                <div class="ml-3">
+                    <h3 class="text-lg font-medium text-gray-900">Success!</h3>
+                    <p class="text-sm text-gray-500">${message}</p>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(notification);
+    
+    // Auto-hide after 5 seconds
+    setTimeout(() => {
+        if (notification && notification.parentElement) {
+            notification.remove();
+        }
+    }, 5000);
+}
+
+// Show starting notification
+function showStartingNotification() {
+    let notification = document.createElement('div');
+    notification.className = 'fixed top-4 left-4 w-80 bg-white rounded-lg shadow-lg border-l-4 border-yellow-500 z-50';
+    
+    notification.innerHTML = `
+        <div class="p-4">
+            <div class="flex items-center">
+                <div class="flex-shrink-0">
+                    <i class="mdi mdi-loading mdi-spin text-yellow-500 text-xl"></i>
+                </div>
+                <div class="ml-3">
+                    <h3 class="text-lg font-medium text-gray-900">Starting Monitoring</h3>
+                    <p class="text-sm text-gray-500">Initializing network monitoring and generating test traffic...</p>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(notification);
+    
+    // Auto-hide after 5 seconds
+    setTimeout(() => {
+        if (notification && notification.parentElement) {
+            notification.remove();
+        }
+    }, 5000);
+}
+
+// Show traffic notification
+function showTrafficNotification(data) {
+    // Create or update traffic notification
+    let notification = document.getElementById('traffic-notification');
+    if (!notification) {
+        notification = document.createElement('div');
+        notification.id = 'traffic-notification';
+        notification.className = 'fixed bottom-4 right-4 w-80 bg-white rounded-lg shadow-lg border-l-4 border-green-500 z-50';
+        document.body.appendChild(notification);
+    }
+    
+    notification.innerHTML = `
+        <div class="p-4">
+            <div class="flex items-center justify-between">
+                <h3 class="text-lg font-medium text-gray-900">Traffic Detected</h3>
+                <button onclick="this.parentElement.parentElement.parentElement.remove()" class="text-gray-400 hover:text-gray-500">
+                    <i class="mdi mdi-close text-xl"></i>
+                </button>
+            </div>
+            <div class="mt-2 space-y-2">
+                <div class="flex justify-between">
+                    <span class="text-sm text-gray-500">IP Address:</span>
+                    <span class="text-sm font-medium font-mono">${data.ip}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-sm text-gray-500">Request Rate:</span>
+                    <span class="text-sm font-medium">${data.request_rate || 0} req/s</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-sm text-gray-500">Total Requests:</span>
+                    <span class="text-sm font-medium">${data.request_count || 0}</span>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Auto-hide after 8 seconds
+    setTimeout(() => {
+        if (notification && notification.parentElement) {
+            notification.remove();
+        }
+    }, 8000);
+}
+
+// Initialize global variables
+if (!window.alertCount) {
+    window.alertCount = 0;
+}
+if (!window.connections) {
+    window.connections = new Map();
+}
+
+// Initialize the page
+document.addEventListener('DOMContentLoaded', () => {
+    try {
+        // Initialize charts
+        initializeCharts();
+        
+        // Initial render
+        renderConnectionsTable();
+        updateStats();
+        
+        // Check initial status
+        setTimeout(() => {
+            checkStatus();
+        }, 2000);
+        
+        // Try to start monitoring automatically
+        setTimeout(() => {
+            startMonitoring();
+        }, 3000);
+        
+        // Set up periodic status checking
+        setInterval(() => {
+            checkStatus();
+        }, 30000); // Check every 30 seconds
+        
+        // Set up refresh button if it exists
+        const refreshBtn = document.getElementById('refresh-btn');
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', () => {
+                if (window.showStartingNotification) {
+                    window.showStartingNotification('Refreshing page...');
+                }
+                window.location.reload();
+            });
+        }
+        
+        console.log('Page initialization complete');
+        
+        // Show success notification when page is ready
+        setTimeout(() => {
+            if (window.showSuccessNotification) {
+                window.showSuccessNotification('DDoS Detection Dashboard is ready!');
+            }
+        }, 1000);
+    } catch (e) {
+        console.error('Error during page initialization:', e);
+        
+        // Show failure notification if initialization fails
+        if (window.showFailureNotification) {
+            window.showFailureNotification('Error during page initialization. Check console for details.');
+        }
+    }
+});
+
+// Show notification when page is about to unload
+window.addEventListener('beforeunload', () => {
+    if (window.showStartingNotification) {
+        window.showStartingNotification('Page is being refreshed...');
+    }
+});
+</script>
+{% endblock %}

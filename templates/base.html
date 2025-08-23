@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DDoS Detection System</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/@mdi/font@5.9.55/css/materialdesignicons.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.0.1/dist/socket.io.min.js"></script>
+    <style>
+        .sidebar {
+            transition: all 0.3s;
+        }
+        .alert-enter {
+            transform: translateX(100%);
+        }
+        .alert-enter-active {
+            transform: translateX(0);
+            transition: transform 300ms ease-in-out;
+        }
+        .alert-exit {
+            transform: translateX(0);
+        }
+        .alert-exit-active {
+            transform: translateX(100%);
+            transition: transform 300ms ease-in-out;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans">
+    <div class="flex h-screen overflow-hidden">
+        <!-- Sidebar -->
+        <div class="sidebar bg-indigo-800 text-white w-64 flex-shrink-0">
+            <div class="p-4">
+                <h1 class="text-2xl font-bold">DDoS Shield</h1>
+                <p class="text-indigo-300 text-sm">Real-time Network Protection</p>
+            </div>
+            <nav class="mt-8">
+                <a href="/" class="flex items-center px-6 py-3 text-white bg-indigo-900 border-r-4 border-indigo-500">
+                    <i class="mdi mdi-view-dashboard mr-3"></i>
+                    Dashboard
+                </a>
+                <a href="#blocked" class="flex items-center px-6 py-3 text-indigo-200 hover:bg-indigo-700">
+                    <i class="mdi mdi-shield-lock mr-3"></i>
+                    Blocked IPs
+                </a>
+                <a href="#alerts" class="flex items-center px-6 py-3 text-indigo-200 hover:bg-indigo-700">
+                    <i class="mdi mdi-alert-circle mr-3"></i>
+                    Alerts
+                    <span id="alert-count" class="ml-auto bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">0</span>
+                </a>
+                <a href="#settings" class="flex items-center px-6 py-3 text-indigo-200 hover:bg-indigo-700">
+                    <i class="mdi mdi-cog mr-3"></i>
+                    Settings
+                </a>
+            </nav>
+        </div>
+
+        <!-- Main Content -->
+        <div class="flex-1 flex flex-col overflow-hidden">
+            <!-- Top Navigation -->
+            <header class="bg-white shadow-sm">
+                <div class="flex items-center justify-between p-4">
+                    <div class="flex items-center">
+                        <button class="text-gray-500 focus:outline-none lg:hidden">
+                            <i class="mdi mdi-menu text-2xl"></i>
+                        </button>
+                        <h2 class="ml-4 text-xl font-semibold text-gray-800">{% block title %}Dashboard{% endblock %}</h2>
+                    </div>
+                    <div class="flex items-center">
+                        <div class="relative">
+                            <span id="connection-status" class="flex items-center text-sm text-gray-500">
+                                <span class="w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+                                <span>Connected</span>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Page Content -->
+            <main class="flex-1 overflow-x-hidden overflow-y-auto bg-gray-100 p-6">
+                {% block content %}{% endblock %}
+            </main>
+        </div>
+    </div>
+
+    <!-- Alert Notification -->
+    <div id="alert-notification" class="fixed bottom-4 right-4 w-80 bg-white rounded-lg shadow-lg transform transition-transform duration-300 translate-x-full">
+        <div class="p-4 border-l-4 border-red-500">
+            <div class="flex">
+                <div class="flex-shrink-0">
+                    <i class="mdi mdi-alert-circle text-red-500 text-2xl"></i>
+                </div>
+                <div class="ml-3">
+                    <h3 class="text-sm font-medium text-gray-900" id="alert-title"></h3>
+                    <div class="mt-1 text-sm text-gray-500" id="alert-message"></div>
+                    <div class="mt-2 text-xs text-gray-500" id="alert-timestamp"></div>
+                </div>
+                <div class="ml-auto pl-3">
+                    <button onclick="document.getElementById('alert-notification').classList.add('translate-x-full')" class="text-gray-400 hover:text-gray-500">
+                        <i class="mdi mdi-close"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Socket.IO connection with reconnection logic
+        let socket;
+        // Make socket globally accessible
+        window.socket = socket;
+        const globalState = {
+            alertCount: 0,
+            reconnectAttempts: 0,
+            maxReconnectAttempts: 5,
+            reconnectInterval: null,
+            isConnected: false
+        };
+
+        function connectSocket() {
+            // Close existing connection if any
+            if (socket) {
+                socket.close();
+            }
+
+            // Create new connection
+            socket = io({
+                reconnection: true,
+                reconnectionAttempts: globalState.maxReconnectAttempts,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 5000,
+                timeout: 20000
+            });
+            
+            // Update global reference
+            window.socket = socket;
+
+            // Connection established
+            socket.on('connect', () => {
+                console.log('Connected to server');
+                globalState.reconnectAttempts = 0;
+                clearInterval(globalState.reconnectInterval);
+                globalState.isConnected = true;
+                updateConnectionStatus(true);
+                
+                // Show success notification
+                if (window.showSuccessNotification) {
+                    window.showSuccessNotification('WebSocket connection established successfully!');
+                }
+                
+                // Request initial data
+                socket.emit('get_initial_data');
+            });
+            
+            // Listen for server events
+            socket.on('ddos_alert', handleDDoSAlert);
+            socket.on('traffic_update', handleTrafficUpdate);
+            socket.on('system_stats', handleSystemStats);
+            socket.on('initial_data', handleInitialData);
+            socket.on('error', handleError);
+
+            // Connection lost
+            socket.on('disconnect', (reason) => {
+                console.log('Disconnected:', reason);
+                globalState.isConnected = false;
+                updateConnectionStatus(false, 'Disconnected. Reconnecting...');
+                
+                // Show failure notification
+                if (window.showFailureNotification) {
+                    window.showFailureNotification('WebSocket connection lost. Attempting to reconnect...');
+                }
+                
+                if (reason === 'io server disconnect') {
+                    // Server intentionally disconnected, try to reconnect
+                    const reconnect = () => {
+                        if (!globalState.isConnected && globalState.reconnectAttempts < globalState.maxReconnectAttempts) {
+                            console.log('Attempting to reconnect...');
+                            socket.connect();
+                        } else if (globalState.reconnectAttempts >= globalState.maxReconnectAttempts) {
+                            clearInterval(globalState.reconnectInterval);
+                            updateConnectionStatus(false, 'Failed to reconnect. Please refresh the page.');
+                            
+                            // Show failure notification
+                            if (window.showFailureNotification) {
+                                window.showFailureNotification('Failed to reconnect. Please refresh the page.');
+                            }
+                        }
+                    };
+                    
+                    // Clear any existing interval
+                    if (globalState.reconnectInterval) {
+                        clearInterval(globalState.reconnectInterval);
+                    }
+                    
+                    // Start new reconnection attempts
+                    globalState.reconnectAttempts = 0;
+                    globalState.reconnectInterval = setInterval(reconnect, 3000);
+                }
+            });
+
+            // Connection error
+            socket.on('connect_error', (error) => {
+                console.error('Connection error:', error);
+                updateConnectionStatus(false, 'Connection error. Retrying...');
+                
+                // Show failure notification
+                if (window.showFailureNotification) {
+                    window.showFailureNotification('WebSocket connection error. Retrying...');
+                }
+                
+                if (globalState.reconnectAttempts < globalState.maxReconnectAttempts) {
+                    globalState.reconnectAttempts++;
+                    const delay = Math.min(1000 * Math.pow(2, globalState.reconnectAttempts), 30000);
+                    console.log(`Reconnecting in ${delay}ms...`);
+                } else {
+                    updateConnectionStatus(false, 'Max reconnection attempts reached. Please refresh the page.');
+                    
+                    // Show failure notification
+                    if (window.showFailureNotification) {
+                        window.showFailureNotification('Max reconnection attempts reached. Please refresh the page.');
+                    }
+                }
+            });
+
+            // Reconnection failed
+            socket.on('reconnect_failed', () => {
+                console.error('Failed to reconnect');
+                updateConnectionStatus(false, 'Connection failed. Please refresh the page.');
+                
+                // Show failure notification
+                if (window.showFailureNotification) {
+                    window.showFailureNotification('WebSocket reconnection failed. Please refresh the page.');
+                }
+            });
+
+            // Handle DDoS alerts
+            socket.on('ddos_alert', handleDDoSAlert);
+            
+            // Handle traffic updates
+            socket.on('traffic_update', handleTrafficUpdate);
+            
+            // Handle system stats
+            socket.on('system_stats', handleSystemStats);
+        }
+
+        function updateConnectionStatus(connected, message = null) {
+            const statusElement = document.getElementById('connection-status');
+            if (connected) {
+                statusElement.innerHTML = `
+                    <span class="w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+                    <span>Connected</span>
+                `;
+            } else {
+                statusElement.innerHTML = `
+                    <span class="w-2 h-2 bg-red-500 rounded-full mr-2"></span>
+                    <span>${message || 'Disconnected'}</span>
+                `;
+            }
+        }
+
+        function handleDDoSAlert(data) {
+            try {
+                if (!data || !data.ip) return;
+                
+                globalState.alertCount++;
+                const alertCountElement = document.getElementById('alert-count');
+                if (alertCountElement) {
+                    alertCountElement.textContent = globalState.alertCount;
+                    alertCountElement.classList.remove('hidden');
+                }
+                
+                // Show success notification
+                if (window.showSuccessNotification) {
+                    window.showSuccessNotification(`DDoS alert detected from ${data.ip}!`);
+                }
+                
+                // Update alert notification
+                const alertTitle = document.getElementById('alert-title');
+                const alertMessage = document.getElementById('alert-message');
+                const alertTimestamp = document.getElementById('alert-timestamp');
+                
+                if (alertTitle && alertMessage && alertTimestamp) {
+                    alertTitle.textContent = 'DDoS Alert';
+                    alertMessage.textContent = `Suspicious activity from ${data.ip}`;
+                    alertTimestamp.textContent = new Date(data.timestamp).toLocaleString();
+                    
+                    // Show notification
+                    const notification = document.getElementById('alert-notification');
+                    if (notification) {
+                        notification.classList.remove('translate-x-full');
+                        
+                        // Auto-hide after 10 seconds
+                        setTimeout(() => {
+                            notification.classList.add('translate-x-full');
+                        }, 10000);
+                    }
+                }
+                
+                // Play alert sound
+                try {
+                    const audio = new Audio('/static/alert.mp3');
+                    audio.play().catch(e => console.log('Audio play failed:', e));
+                } catch (e) {
+                    console.error('Error playing alert sound:', e);
+                }
+                
+                console.log('DDoS Alert:', data);
+            } catch (e) {
+                console.error('Error handling DDoS alert:', e);
+                
+                // Show failure notification
+                if (window.showFailureNotification) {
+                    window.showFailureNotification('Error processing DDoS alert. Check console for details.');
+                }
+            }
+        }
+
+        function handleTrafficUpdate(data) {
+            try {
+                console.log('Traffic update:', data);
+                
+                // Show success notification for first few traffic updates
+                if (window.trafficUpdateCount === undefined) {
+                    window.trafficUpdateCount = 0;
+                }
+                window.trafficUpdateCount++;
+                
+                if (window.trafficUpdateCount <= 3 && window.showSuccessNotification) {
+                    window.showSuccessNotification(`Traffic update received from ${data.ip}!`);
+                }
+                
+                // This will be handled by the specific page scripts
+                if (window.handleTrafficUpdate) {
+                    window.handleTrafficUpdate(data);
+                }
+            } catch (e) {
+                console.error('Error handling traffic update:', e);
+                
+                // Show failure notification
+                if (window.showFailureNotification) {
+                    window.showFailureNotification('Error processing traffic update. Check console for details.');
+                }
+            }
+        }
+
+        function handleSystemStats(data) {
+            try {
+                console.log('System stats:', data);
+                
+                // Show success notification for first few system stats updates
+                if (window.systemStatsUpdateCount === undefined) {
+                    window.systemStatsUpdateCount = 0;
+                }
+                window.systemStatsUpdateCount++;
+                
+                if (window.systemStatsUpdateCount <= 3 && window.showSuccessNotification) {
+                    window.showSuccessNotification('System stats updated!');
+                }
+                
+                // This will be handled by the specific page scripts
+                if (window.handleSystemStats) {
+                    window.handleSystemStats(data);
+                }
+            } catch (e) {
+                console.error('Error handling system stats:', e);
+                
+                // Show failure notification
+                if (window.showFailureNotification) {
+                    window.showFailureNotification('Error processing system stats. Check console for details.');
+                }
+            }
+        }
+        
+        function handleInitialData(data) {
+            try {
+                console.log('Received initial data:', data);
+                
+                // Show success notification
+                if (window.showSuccessNotification) {
+                    window.showSuccessNotification('Initial data received from server!');
+                }
+                
+                // Process traffic updates
+                if (data.traffic && Array.isArray(data.traffic)) {
+                    console.log(`Processing ${data.traffic.length} initial traffic updates`);
+                    data.traffic.forEach(update => {
+                        if (window.handleTrafficUpdate) {
+                            window.handleTrafficUpdate(update);
+                        }
+                    });
+                } else {
+                    console.log('No initial traffic data received');
+                }
+                
+                // Process stats
+                if (data.stats && window.handleSystemStats) {
+                    console.log('Processing initial stats:', data.stats);
+                    window.handleSystemStats(data.stats);
+                } else {
+                    console.log('No initial stats received');
+                }
+            } catch (e) {
+                console.error('Error handling initial data:', e);
+                
+                // Show failure notification
+                if (window.showFailureNotification) {
+                    window.showFailureNotification('Error processing initial data. Check console for details.');
+                }
+            }
+        }
+        
+        function handleError(data) {
+            console.error('Server error:', data.message || 'Unknown error');
+            
+            // Show failure notification
+            if (window.showFailureNotification) {
+                window.showFailureNotification(`Server error: ${data.message || 'Unknown error'}`);
+            }
+            
+            // You could show an error message to the user here
+            if (data.message) {
+                alert(`Error: ${data.message}`);
+            }
+        }
+
+        // Initialize socket connection when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            // Initialize UI components
+            const alertCountElement = document.getElementById('alert-count');
+            if (alertCountElement) {
+                alertCountElement.textContent = '0';
+            }
+            
+            // Show starting notification
+            if (window.showStartingNotification) {
+                window.showStartingNotification('Initializing DDoS Detection System...');
+            }
+            
+            // Connect to WebSocket
+            connectSocket();
+            
+            // Set up manual reconnection button if needed
+            const reconnectBtn = document.getElementById('reconnect-btn');
+            if (reconnectBtn) {
+                reconnectBtn.addEventListener('click', () => {
+                    if (socket && socket.connected) {
+                        console.log('Already connected');
+                        return;
+                    }
+                    console.log('Manual reconnection attempt...');
+                    connectSocket();
+                });
+            }
+            
+            // Set up connection status indicator
+            const connectionStatus = document.getElementById('connection-status');
+            if (connectionStatus) {
+                connectionStatus.innerHTML = `
+                    <span class="w-2 h-2 bg-yellow-500 rounded-full mr-2"></span>
+                    <span>Connecting...</span>
+                `;
+            }
+            
+            // Show page loaded notification
+            setTimeout(() => {
+                if (window.showSuccessNotification) {
+                    window.showSuccessNotification('DDoS Detection System loaded successfully!');
+                }
+            }, 1000);
+        });
+        
+        // Show notification when page is about to unload
+        window.addEventListener('beforeunload', () => {
+            if (window.showStartingNotification) {
+                window.showStartingNotification('Page is being refreshed...');
+            }
+        });
+    </script>
+    
+    {% block scripts %}{% endblock %}
+</body>
+</html>
