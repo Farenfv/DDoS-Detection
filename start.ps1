@@ -3,6 +3,9 @@
 Write-Host "Starting DDoS Detection System..." -ForegroundColor Green
 Write-Host ""
 
+# Change to the directory where this script is located
+Set-Location -Path $PSScriptRoot
+
 # Check if Python is installed
 try {
     $pythonVersion = python --version 2>&1
@@ -16,7 +19,12 @@ try {
 
 # Check if requirements are installed
 Write-Host "Checking dependencies..." -ForegroundColor Yellow
-pip install -r requirements.txt
+if (Test-Path "requirements.txt") {
+    pip install -r requirements.txt
+} else {
+    Write-Host "Warning: requirements.txt not found in current directory" -ForegroundColor Yellow
+    Write-Host "Current directory: $(Get-Location)" -ForegroundColor Yellow
+}
 
 Write-Host ""
 Write-Host "Starting application..." -ForegroundColor Green
@@ -25,6 +33,12 @@ Write-Host "Press Ctrl+C to stop the application" -ForegroundColor Yellow
 Write-Host ""
 
 # Start the application
-python ddos_detection.py
+if (Test-Path "ddos_detection.py") {
+    python ddos_detection.py
+} else {
+    Write-Host "Error: ddos_detection.py not found in current directory" -ForegroundColor Red
+    Write-Host "Current directory: $(Get-Location)" -ForegroundColor Yellow
+    Write-Host "Please ensure you're running this from the correct folder" -ForegroundColor Yellow
+}
 
 Read-Host "Press Enter to exit"

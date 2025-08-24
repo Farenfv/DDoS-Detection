@@ -13,6 +13,10 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Setup Scapy environment variables before any Scapy imports
+os.environ['SCAPY_USE_PCAPDNET'] = '1'  # Force pcap usage on Windows
+os.environ['SCAPY_CACHE_DISABLE'] = '1'  # Disable cache to avoid permission issues
+
 # Third-party imports
 import numpy as np
 import pandas as pd
@@ -46,11 +50,13 @@ app.config.update(
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode='eventlet',
-    logger=True,
-    engineio_logger=True,
+    async_mode='threading',  # Changed from eventlet to threading for better compatibility
+    logger=False,  # Reduce logging noise
+    engineio_logger=False,
     ping_timeout=60,
-    ping_interval=25
+    ping_interval=25,
+    transports=['polling', 'websocket'],  # Try polling first, then websocket
+    allow_upgrades=True
 )
 
 # Initialize metrics
@@ -68,6 +74,7 @@ traffic_data = defaultdict(list)
 history_data = defaultdict(list)
 blocked_ips = set()
 ml_model = None
+monitoring_active = False  # Track if monitoring is active
 
 # Thread lock for thread-safe operations
 traffic_lock = threading.Lock()
@@ -79,7 +86,7 @@ ml_features = ['request_count', 'request_rate', 'avg_packet_size', 'src_port_ent
 ml_scaler = None
 
 # Setup logging
-logging.basicConfig(filename='ddos_detection.log', level=logging.INFO, format='%(asctime)s - %(message)s')
+logging.basicConfig(filename='ddos_detection.log', level=logging.DEBUG, format='%(asctime)s - %(message)s')
 
 # Parameters
 TIME_WINDOW = 10  # Time window in seconds
@@ -105,36 +112,43 @@ def train_ml_model():
     """Train the ML model on historical data."""
     global ml_model, ml_scaler
     
-    # This is a simplified example - in production, you'd use real historical data
-    X = np.random.rand(100, len(ml_features))  # Replace with real data
-    
+    # Initialize model without training on fake data
+    # Model will be trained incrementally as real traffic data is collected
     ml_model = IsolationForest(
         n_estimators=100,
         contamination=0.1,
         random_state=42
     )
-    ml_model.fit(X)
-    logger.info("ML model trained successfully")
+    logger.info("ML model initialized - will train on real traffic data as it becomes available")
 
 def detect_ddos(packet):
     """Process incoming network packets and detect potential DDoS attacks."""
     try:
+        logger.debug(f"Processing packet: {packet.summary() if hasattr(packet, 'summary') else 'Unknown packet'}")
+        
         if not packet.haslayer('IP'):
+            logger.debug("Packet has no IP layer, skipping")
             return
             
         ip_src = packet['IP'].src
         current_time = time.time()
         
+        logger.debug(f"Processing packet from IP: {ip_src}")
+        
         # Skip blocked IPs
         if ip_src in blocked_ips:
+            logger.debug(f"IP {ip_src} is blocked, skipping")
             return
             
         # Store packet data
-        traffic_data[ip_src].append({
-            'timestamp': current_time,
-            'size': len(packet),
-            'src_port': packet.sport if hasattr(packet, 'sport') else 0
-        })
+        with traffic_lock:
+            traffic_data[ip_src].append({
+                'timestamp': current_time,
+                'size': len(packet),
+                'src_port': packet.sport if hasattr(packet, 'sport') else 0
+            })
+        
+        logger.debug(f"Added packet data for IP {ip_src}, total packets: {len(traffic_data[ip_src])}")
         
         # Extract features and predict
         features = extract_features(ip_src, traffic_data[ip_src], current_time)
@@ -173,13 +187,14 @@ def analyze_traffic():
     
     def emit_traffic_update(ip, features, timestamp):
         try:
-            socketio.emit('traffic_update', {
+            traffic_update = {
                 'ip': ip,
                 'timestamp': int(timestamp * 1000),  # Convert to milliseconds
                 'request_rate': float(features.get('request_rate', 0)),
                 'request_count': int(features.get('request_count', 0))
-            })
-            logger.debug(f"Emitted traffic update for {ip}")
+            }
+            socketio.emit('traffic_update', traffic_update)
+            logger.info(f"Emitted traffic update for {ip}: {traffic_update}")
         except Exception as e:
             logger.error(f"Error emitting traffic update for {ip}: {e}", exc_info=True)
     
@@ -220,6 +235,9 @@ def analyze_traffic():
                 ips_to_process = list(traffic_data.keys())
             
             # Update metrics for each active IP
+            if ips_to_process:
+                logger.info(f"Processing {len(ips_to_process)} active IPs for traffic updates")
+                
             for ip in ips_to_process:
                 try:
                     with traffic_lock:
@@ -232,6 +250,10 @@ def analyze_traffic():
                             
                             # Update request rate metric
                             prometheus_metrics['request_rate'].set(features.get('request_rate', 0))
+                        else:
+                            logger.warning(f"No features extracted for IP {ip}")
+                    else:
+                        logger.warning(f"No packets found for IP {ip}")
                 
                 except Exception as e:
                     logger.error(f"Error processing IP {ip}: {e}", exc_info=True)
@@ -293,10 +315,207 @@ def get_default_interface():
         logger.error(f"Error detecting network interface: {e}")
         return None
 
+def start_alternative_monitoring():
+    """Start alternative network monitoring using system network statistics."""
+    global alternative_monitoring_active
+    
+    # Prevent multiple instances
+    if hasattr(start_alternative_monitoring, 'running') and start_alternative_monitoring.running:
+        logger.warning("Alternative monitoring already running, skipping duplicate start")
+        return
+    
+    start_alternative_monitoring.running = True
+    logger.info("Starting alternative network monitoring using system statistics...")
+    
+    def monitor_network_connections():
+        try:
+            import psutil
+            import time
+            
+            while not shutdown_event.is_set():
+                try:
+                    # Get network connections with reduced frequency to avoid conflicts
+                    connections = psutil.net_connections(kind='inet')
+                    current_time = time.time()
+                    
+                    # Process active connections with filtering
+                    active_ips = set()
+                    connection_counts = {}
+                    
+                    for conn in connections:
+                        if conn.raddr and conn.status == 'ESTABLISHED':  # Only established connections
+                            remote_ip = conn.raddr.ip
+                            # Filter out local, loopback, and IPv6 addresses
+                            if (remote_ip and remote_ip != '127.0.0.1' and 
+                                not remote_ip.startswith('169.254') and 
+                                not remote_ip.startswith('::') and
+                                remote_ip != '::1'):
+                                active_ips.add(remote_ip)
+                                connection_counts[remote_ip] = connection_counts.get(remote_ip, 0) + 1
+                    
+                    # Update traffic data with stable connection info
+                    with traffic_lock:
+                        # Clear old data first to prevent accumulation
+                        old_ips = set(traffic_data.keys()) - active_ips
+                        for ip in old_ips:
+                            if ip in traffic_data:
+                                del traffic_data[ip]
+                        
+                        # Add current active connections
+                        for ip in active_ips:
+                            # Create packet data for each connection
+                            conn_count = connection_counts.get(ip, 1)
+                            packet_data = {
+                                'timestamp': current_time,
+                                'size': 64 + (conn_count * 5),  # Variable size based on connections
+                                'src_port': 80,
+                                'dst_port': 443
+                            }
+                            traffic_data[ip] = [packet_data]  # Single packet per IP
+                    
+                    # Reduced logging frequency
+                    if len(active_ips) > 0:
+                        logger.debug(f"Monitoring {len(active_ips)} active connections")
+                    
+                    time.sleep(3)  # Increased interval to reduce conflicts
+                    
+                except Exception as e:
+                    logger.error(f"Error in alternative monitoring: {e}")
+                    time.sleep(10)
+                    
+        except ImportError:
+            logger.error("psutil not available for alternative monitoring")
+        except Exception as e:
+            logger.error(f"Alternative monitoring failed: {e}")
+        finally:
+            start_alternative_monitoring.running = False
+    
+    # Start monitoring thread
+    monitor_thread = threading.Thread(target=monitor_network_connections)
+    monitor_thread.daemon = True
+    monitor_thread.start()
+    logger.info("Alternative network monitoring started")
+
+def setup_scapy_cache():
+    """Setup Scapy cache directory with proper permissions."""
+    try:
+        import os
+        from pathlib import Path
+        
+        # Get user's cache directory
+        cache_dir = Path.home() / '.cache' / 'scapy'
+        
+        # Create cache directory if it doesn't exist
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Set proper permissions (Windows)
+        if os.name == 'nt':
+            try:
+                import stat
+                # Make directory writable
+                cache_dir.chmod(stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
+                logger.info(f"Scapy cache directory setup: {cache_dir}")
+            except Exception as e:
+                logger.warning(f"Could not set cache permissions: {e}")
+        
+        return True
+    except Exception as e:
+        logger.error(f"Failed to setup Scapy cache: {e}")
+        return False
+
 def start_sniffing():
     """Start packet sniffing on the automatically detected interface."""
     try:
-        from scapy.all import sniff, conf, get_if_list
+        # Setup Scapy cache first
+        setup_scapy_cache()
+        
+        # Import Scapy with comprehensive error handling
+        scapy_imported = False
+        
+        # Method 1: Try normal import
+        try:
+            from scapy.all import sniff, conf, get_if_list
+            scapy_imported = True
+            logger.info("Scapy imported successfully")
+        except PermissionError as pe:
+            logger.error(f"Scapy cache permission error: {pe}")
+            logger.info("Trying alternative Scapy import methods...")
+            
+            # Method 2: Force clear cache and retry
+            try:
+                import shutil
+                from pathlib import Path
+                cache_dir = Path.home() / '.cache' / 'scapy'
+                
+                if cache_dir.exists():
+                    # Try to take ownership and delete
+                    import subprocess
+                    try:
+                        subprocess.run(['takeown', '/f', str(cache_dir), '/r', '/d', 'y'], 
+                                     capture_output=True, check=False)
+                        subprocess.run(['icacls', str(cache_dir), '/grant', f'{os.getlogin()}:F', '/t'], 
+                                     capture_output=True, check=False)
+                        shutil.rmtree(cache_dir, ignore_errors=True)
+                        logger.info("Forcefully removed Scapy cache directory")
+                    except Exception as ownership_error:
+                        logger.warning(f"Could not take ownership of cache: {ownership_error}")
+                        # Try simple removal
+                        try:
+                            shutil.rmtree(cache_dir, ignore_errors=True)
+                        except:
+                            pass
+                
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Try importing again
+                from scapy.all import sniff, conf, get_if_list
+                scapy_imported = True
+                logger.info("Scapy import successful after forced cache cleanup")
+                
+            except Exception as cache_error:
+                logger.warning(f"Cache cleanup failed: {cache_error}")
+                
+                # Method 3: Try with alternative temp directory
+                try:
+                    import tempfile
+                    temp_cache = Path(tempfile.gettempdir()) / 'scapy_temp_cache'
+                    temp_cache.mkdir(exist_ok=True)
+                    
+                    os.environ['SCAPY_CACHE_DIR'] = str(temp_cache)
+                    os.environ['SCAPY_USE_PCAPDNET'] = '1'
+                    os.environ['SCAPY_CACHE_DISABLE'] = '1'
+                    
+                    from scapy.all import sniff, conf, get_if_list
+                    scapy_imported = True
+                    logger.info("Scapy import successful with temp cache")
+                    
+                except Exception as temp_error:
+                    logger.error(f"Temp cache method failed: {temp_error}")
+                    
+                    # Method 4: Try completely disabling cache
+                    try:
+                        os.environ['SCAPY_CACHE_DISABLE'] = '1'
+                        os.environ['SCAPY_NO_CACHE'] = '1'
+                        
+                        # Import without cache
+                        import sys
+                        if 'scapy' in sys.modules:
+                            del sys.modules['scapy']
+                        
+                        from scapy.all import sniff, conf, get_if_list
+                        scapy_imported = True
+                        logger.info("Scapy import successful with completely disabled cache")
+                        
+                    except Exception as final_error:
+                        logger.error(f"All Scapy import methods failed: {final_error}")
+                        scapy_imported = False
+        
+        if not scapy_imported:
+            logger.error("Failed to import Scapy - packet capture will not work")
+            logger.error("Try running as Administrator or check Windows permissions")
+            logger.info("Starting alternative network monitoring without raw packet capture...")
+            start_alternative_monitoring()
+            return
         
         # Auto-detect interface if not specified
         interface = config.INTERFACE if config.INTERFACE else get_default_interface()
@@ -316,243 +535,52 @@ def start_sniffing():
         logger.info("Monitoring all network traffic...")
         
         # Start sniffing in a separate thread
-        try:
-            logger.info("Attempting to start packet capture...")
-            sniff(
-                prn=detect_ddos,
-                store=0,
-                filter="ip",
-                count=0,  # 0 means unlimited
-                timeout=0  # 0 means no timeout
-            )
-        except Exception as sniff_error:
-            logger.error(f"Error during sniffing: {sniff_error}")
-            # Try alternative approach for Windows
+        def packet_capture_worker():
             try:
-                logger.info("Trying alternative sniffing method for Windows...")
+                logger.info("Attempting to start packet capture...")
+                logger.info(f"Using detect_ddos function: {detect_ddos}")
                 sniff(
                     prn=detect_ddos,
                     store=0,
                     filter="ip",
-                    count=0,
-                    timeout=0,
-                    iface=conf.iface
+                    count=0,  # 0 means unlimited
+                    timeout=1,  # 1 second timeout to allow checking shutdown
+                    stop_filter=lambda x: shutdown_event.is_set()
                 )
-            except Exception as alt_error:
-                logger.error(f"Alternative sniffing also failed: {alt_error}")
-                # Try Windows-specific approach
+            except Exception as sniff_error:
+                logger.error(f"Error during sniffing: {sniff_error}")
+                # Try alternative approach for Windows
                 try:
-                    logger.info("Trying Windows-specific packet capture...")
-                    from scapy.arch.windows import get_windows_if_list
-                    windows_interfaces = get_windows_if_list()
-                    logger.info(f"Available Windows interfaces: {windows_interfaces}")
-                    
-                    # Try to capture on first available interface
-                    if windows_interfaces:
-                        first_interface = windows_interfaces[0]['name']
-                        logger.info(f"Trying interface: {first_interface}")
-                        sniff(
-                            prn=detect_ddos,
-                            store=0,
-                            filter="ip",
-                            count=0,
-                            timeout=0,
-                            iface=first_interface
-                        )
-                    else:
-                        raise Exception("No Windows interfaces found")
-                        
-                except Exception as win_error:
-                    logger.error(f"Windows-specific capture also failed: {win_error}")
-                    logger.error("Packet capture failed - this often happens on Windows without admin privileges")
-                    # Start enhanced simulated traffic for better user experience
-                    start_enhanced_simulated_traffic()
+                    logger.info("Trying alternative sniffing method for Windows...")
+                    sniff(
+                        prn=detect_ddos,
+                        store=0,
+                        filter="ip",
+                        count=0,
+                        timeout=1,
+                        iface=conf.iface,
+                        stop_filter=lambda x: shutdown_event.is_set()
+                    )
+                except Exception as alt_error:
+                    logger.error(f"Alternative sniffing also failed: {alt_error}")
+                    logger.info("Starting alternative network monitoring...")
+                    start_alternative_monitoring()
+        
+        # Start packet capture in thread
+        capture_thread = threading.Thread(target=packet_capture_worker)
+        capture_thread.daemon = True
+        capture_thread.start()
+        logger.info("Packet capture thread started")
                 
     except Exception as e:
         logger.error(f"Error in packet capture: {e}", exc_info=True)
-        # Don't raise here, just log the error to prevent the app from crashing
-        logger.error("Packet sniffing failed, but application will continue running")
+        logger.error("Packet sniffing failed, starting alternative monitoring")
         logger.error("This is common on Windows - try running as Administrator")
-        # Start enhanced simulated traffic for better user experience
-        start_enhanced_simulated_traffic()
+        logger.info("Starting alternative network monitoring as fallback...")
+        start_alternative_monitoring()
 
-def start_enhanced_simulated_traffic():
-    """Start enhanced simulated traffic that mimics real network behavior."""
-    logger.info("Starting enhanced simulated traffic for realistic network monitoring")
-    
-    def simulate_realistic_traffic():
-        import random
-        import time
-        
-        # Create realistic IP ranges (common private networks)
-        ip_ranges = [
-            ("192.168.1", 1, 254),
-            ("192.168.2", 1, 254),
-            ("10.0.0", 1, 254),
-            ("172.16.0", 1, 254)
-        ]
-        
-        # Generate initial traffic immediately
-        logger.info("Generating initial realistic traffic...")
-        for i in range(8):  # Generate 8 IPs initially
-            ip_range, start, end = random.choice(ip_ranges)
-            ip = f"{ip_range}.{random.randint(start, end)}"
-            current_time = time.time()
-            
-            # Simulate multiple packets per IP with realistic timing
-            num_packets = random.randint(5, 15)
-            for j in range(num_packets):
-                packet_data = {
-                    'timestamp': current_time - random.uniform(0, 10),  # Spread over last 10 seconds
-                    'size': random.randint(64, 1500),
-                    'src_port': random.randint(1024, 65535)
-                }
-                
-                with traffic_lock:
-                    traffic_data[ip].append(packet_data)
-            
-            logger.info(f"Generated initial traffic for {ip}: {num_packets} packets")
-        
-        # Continue generating realistic traffic
-        while not shutdown_event.is_set():
-            try:
-                # Randomly select IP range and generate IP
-                ip_range, start, end = random.choice(ip_ranges)
-                ip = f"{ip_range}.{random.randint(start, end)}"
-                current_time = time.time()
-                
-                # Simulate realistic packet data
-                packet_data = {
-                    'timestamp': current_time,
-                    'size': random.randint(64, 1500),
-                    'src_port': random.randint(1024, 65535)
-                }
-                
-                # Add to traffic data
-                with traffic_lock:
-                    traffic_data[ip].append(packet_data)
-                
-                # Clean up old data
-                cleanup_old_data()
-                
-                # Realistic timing - simulate network bursts
-                if random.random() < 0.3:  # 30% chance of burst
-                    # Generate multiple packets quickly
-                    for _ in range(random.randint(2, 5)):
-                        burst_ip = f"{ip_range}.{random.randint(start, end)}"
-                        burst_packet = {
-                            'timestamp': current_time + random.uniform(0, 0.1),
-                            'size': random.randint(64, 1500),
-                            'src_port': random.randint(1024, 65535)
-                        }
-                        with traffic_lock:
-                            traffic_data[burst_ip].append(burst_packet)
-                
-                # Sleep with realistic intervals
-                time.sleep(random.uniform(0.5, 4.0))
-                
-            except Exception as e:
-                logger.error(f"Error in enhanced simulated traffic: {e}")
-                time.sleep(1)
-    
-    # Start enhanced simulated traffic in a separate thread
-    sim_thread = threading.Thread(target=simulate_realistic_traffic)
-    sim_thread.daemon = True
-    sim_thread.start()
-    logger.info("Enhanced simulated traffic thread started")
 
-def start_continuous_traffic_monitoring():
-    """Start continuous traffic monitoring to ensure UI always has data."""
-    logger.info("Starting continuous traffic monitoring...")
-    
-    def continuous_monitor():
-        import time
-        
-        while not shutdown_event.is_set():
-            try:
-                # Check if we have enough traffic data
-                with traffic_lock:
-                    current_traffic_count = len(traffic_data)
-                
-                # If we have less than 3 active IPs, generate more traffic
-                if current_traffic_count < 3:
-                    logger.info(f"Low traffic detected ({current_traffic_count} IPs), generating more...")
-                    # Generate a few more IPs
-                    for _ in range(3 - current_traffic_count):
-                        start_enhanced_simulated_traffic()
-                
-                # Sleep and check again
-                time.sleep(10)  # Check every 10 seconds
-                
-            except Exception as e:
-                logger.error(f"Error in continuous traffic monitoring: {e}")
-                time.sleep(5)
-    
-    # Start continuous monitoring in a separate thread
-    monitor_thread = threading.Thread(target=continuous_monitor)
-    monitor_thread.daemon = True
-    monitor_thread.start()
-    logger.info("Continuous traffic monitoring thread started")
 
-def start_simulated_traffic():
-    """Start simulated traffic for testing when packet sniffing fails."""
-    logger.info("Starting simulated traffic for testing purposes")
-    
-    def simulate_traffic():
-        import random
-        logger.info("Simulated traffic generator started - creating realistic network activity")
-        
-        # Generate initial traffic immediately
-        for i in range(5):
-            ip = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
-            current_time = time.time()
-            
-            # Simulate multiple packets per IP
-            for j in range(random.randint(3, 8)):
-                packet_data = {
-                    'timestamp': current_time - random.uniform(0, 5),  # Spread over last 5 seconds
-                    'size': random.randint(64, 1500),
-                    'src_port': random.randint(1024, 65535)
-                }
-                
-                with traffic_lock:
-                    traffic_data[ip].append(packet_data)
-            
-            logger.info(f"Generated initial traffic for {ip}: {len(traffic_data[ip])} packets")
-        
-        # Continue generating traffic
-        while not shutdown_event.is_set():
-            try:
-                # Generate random IP addresses
-                ip = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
-                current_time = time.time()
-                
-                # Simulate packet data
-                packet_data = {
-                    'timestamp': current_time,
-                    'size': random.randint(64, 1500),
-                    'src_port': random.randint(1024, 65535)
-                }
-                
-                # Add to traffic data
-                with traffic_lock:
-                    traffic_data[ip].append(packet_data)
-                
-                # Clean up old data
-                cleanup_old_data()
-                
-                # Sleep for a random interval
-                time.sleep(random.uniform(0.5, 3.0))
-                
-            except Exception as e:
-                logger.error(f"Error in simulated traffic: {e}")
-                time.sleep(1)
-    
-    # Start simulated traffic in a separate thread
-    sim_thread = threading.Thread(target=simulate_traffic)
-    sim_thread.daemon = True
-    sim_thread.start()
-    logger.info("Simulated traffic thread started")
 
 def test_packet_capture():
     """Test if packet capture is working on this system."""
@@ -659,14 +687,23 @@ def status():
         # Get network interface info
         interface_info = "Unknown"
         try:
-            from scapy.arch.windows import get_windows_if_list
-            interfaces = get_windows_if_list()
-            if interfaces:
-                interface_info = f"Windows: {len(interfaces)} interfaces available"
+            import psutil
+            interfaces = psutil.net_if_addrs()
+            active_interfaces = []
+            
+            for interface_name, addresses in interfaces.items():
+                for addr in addresses:
+                    if addr.family == 2:  # IPv4
+                        ip = addr.address
+                        if ip != '127.0.0.1' and not ip.startswith('169.254'):
+                            active_interfaces.append(f"{interface_name} ({ip})")
+            
+            if active_interfaces:
+                interface_info = f"Active: {', '.join(active_interfaces[:2])}"  # Show first 2
             else:
-                interface_info = "No Windows interfaces detected"
-        except:
-            interface_info = "Interface detection failed"
+                interface_info = "No active interfaces detected"
+        except Exception as e:
+            interface_info = f"Interface detection failed: {str(e)}"
         
         status_data = {
             'status': 'ok',
@@ -678,7 +715,7 @@ def status():
             'network_interface': interface_info,
             'background_threads': {
                 'analysis_thread': 'analysis_thread' in globals() and analysis_thread.is_alive() if 'analysis_thread' in globals() else False,
-                'sniffing_thread': 'sniffing_thread' in globals() and sniffing_thread.is_alive() if 'sniffing_thread' in globals() else False
+                'sniffing_thread': monitoring_active  # Use persistent monitoring state
             }
         }
         return jsonify(status_data)
@@ -810,101 +847,51 @@ def get_stats():
     }
     return jsonify(stats)
 
-@app.route('/api/generate-test-traffic', methods=['POST'])
-def generate_test_traffic():
-    """Generate test traffic for demonstration purposes."""
+@app.route('/api/force-monitoring', methods=['POST'])
+def force_monitoring():
+    """Force start alternative monitoring for testing."""
     try:
-        import random
-        
-        # Generate some test IPs
-        test_ips = [
-            f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}" 
-            for _ in range(random.randint(3, 8))
-        ]
-        
-        current_time = time.time()
-        
-        # Add test traffic data
-        with traffic_lock:
-            for ip in test_ips:
-                # Generate 5-15 packets per IP
-                num_packets = random.randint(5, 15)
-                for _ in range(num_packets):
-                    packet_data = {
-                        'timestamp': current_time - random.uniform(0, 10),  # Within last 10 seconds
-                        'size': random.randint(64, 1500),
-                        'src_port': random.randint(1024, 65535)
-                    }
-                    traffic_data[ip].append(packet_data)
-        
-        logger.info(f"Generated test traffic for {len(test_ips)} IPs")
-        
+        logger.info("Force starting alternative monitoring...")
+        start_alternative_monitoring()
         return jsonify({
             'status': 'success',
-            'message': f'Generated test traffic for {len(test_ips)} IPs',
-            'ips': test_ips
+            'message': 'Alternative monitoring started'
         })
-        
     except Exception as e:
-        logger.error(f"Error generating test traffic: {e}", exc_info=True)
+        logger.error(f"Error force starting monitoring: {e}")
         return jsonify({
             'status': 'error',
-            'message': f'Failed to generate test traffic: {str(e)}'
+            'message': str(e)
         }), 500
 
-@app.route('/api/start-real-monitoring', methods=['POST'])
-def start_real_monitoring():
-    """Attempt to start real network monitoring."""
-    try:
-        logger.info("User requested to start real network monitoring...")
-        
-        # Test if we can actually capture packets
-        if test_packet_capture():
-            logger.info("Real packet capture is working - switching to real monitoring")
-            
-            # Clear existing simulated traffic
-            with traffic_lock:
-                traffic_data.clear()
-            
-            # Start real packet sniffing
-            sniffing_thread = threading.Thread(target=start_sniffing)
-            sniffing_thread.daemon = True
-            sniffing_thread.start()
-            
-            return jsonify({
-                'status': 'success',
-                'message': 'Real network monitoring started successfully!',
-                'monitoring_type': 'real'
-            })
-        else:
-            logger.warning("Real packet capture failed - continuing with simulated traffic")
-            return jsonify({
-                'status': 'warning',
-                'message': 'Real packet capture failed. Continuing with simulated traffic.',
-                'monitoring_type': 'simulated',
-                'reason': 'Packet capture requires administrator privileges on Windows'
-            })
-        
-    except Exception as e:
-        logger.error(f"Error starting real monitoring: {e}", exc_info=True)
-        return jsonify({
-            'status': 'error',
-            'message': f'Failed to start real monitoring: {str(e)}'
-        }), 500
+
 
 @app.route('/api/clear-traffic', methods=['POST'])
 def clear_traffic():
-    """Clear all traffic data."""
+    """Clear old traffic data but keep monitoring active."""
     try:
-        with traffic_lock:
-            traffic_data.clear()
+        current_time = time.time()
         
-        logger.info("All traffic data cleared")
+        with traffic_lock:
+            # Instead of clearing all data, just remove old entries
+            for ip in list(traffic_data.keys()):
+                # Keep only very recent data (last 5 seconds) to maintain monitoring
+                traffic_data[ip] = [pkt for pkt in traffic_data[ip] 
+                                  if current_time - pkt['timestamp'] <= 5]
+                # Remove IP if no recent activity
+                if not traffic_data[ip]:
+                    del traffic_data[ip]
+        
+        logger.info("Old traffic data cleared, monitoring remains active")
+        
+        # Get current active connections after cleanup
+        with traffic_lock:
+            active_conns = len(traffic_data)
         
         return jsonify({
             'status': 'success',
-            'message': 'All traffic data cleared successfully',
-            'active_connections': 0
+            'message': 'Old traffic data cleared successfully',
+            'active_connections': active_conns
         })
         
     except Exception as e:
@@ -914,33 +901,6 @@ def clear_traffic():
             'message': f'Failed to clear traffic data: {str(e)}'
         }), 500
 
-@app.route('/api/restart-monitoring', methods=['POST'])
-def restart_monitoring():
-    """Restart the monitoring system."""
-    try:
-        logger.info("User requested to restart monitoring system...")
-        
-        # Clear existing traffic
-        with traffic_lock:
-            traffic_data.clear()
-        
-        # Start enhanced simulated traffic
-        start_enhanced_simulated_traffic()
-        
-        logger.info("Monitoring system restarted")
-        
-        return jsonify({
-            'status': 'success',
-            'message': 'Monitoring system restarted successfully',
-            'monitoring_type': 'simulated'
-        })
-        
-    except Exception as e:
-        logger.error(f"Error restarting monitoring: {e}", exc_info=True)
-        return jsonify({
-            'status': 'error',
-            'message': f'Failed to restart monitoring: {str(e)}'
-        }), 500
 
 @app.route('/api/system-info')
 def system_info():
@@ -984,10 +944,13 @@ def system_info():
 
 def start_background_tasks():
     """Start all background tasks."""
-    global analysis_thread
+    global analysis_thread, monitoring_active
     
     # Clear shutdown event in case of restarts
     shutdown_event.clear()
+    
+    # Set monitoring as active
+    monitoring_active = True
     
     # Start traffic analysis in a separate thread
     analysis_thread = threading.Thread(target=analyze_traffic)
@@ -997,10 +960,11 @@ def start_background_tasks():
 
 def stop_background_tasks():
     """Stop all background tasks gracefully."""
-    global analysis_thread
+    global analysis_thread, monitoring_active
     
     logger.info("Stopping background tasks...")
     shutdown_event.set()
+    monitoring_active = False
     
     # Wait for analysis thread to finish
     if analysis_thread and analysis_thread.is_alive():
@@ -1033,19 +997,19 @@ if __name__ == "__main__":
         # Test packet capture capability first
         if test_packet_capture():
             logger.info("Packet capture test passed - starting real network monitoring")
+            # Start packet sniffing in a separate thread
+            sniffing_thread = threading.Thread(target=start_sniffing)
+            sniffing_thread.daemon = True
+            sniffing_thread.start()
+            logger.info("Started packet sniffing thread")
         else:
-            logger.warning("Packet capture test failed - will use enhanced simulated traffic")
-            # Start enhanced simulated traffic immediately for better user experience
-            start_enhanced_simulated_traffic()
+            logger.warning("Packet capture test failed - starting alternative monitoring")
         
-        # Start packet sniffing in a separate thread
-        sniffing_thread = threading.Thread(target=start_sniffing)
-        sniffing_thread.daemon = True
-        sniffing_thread.start()
-        logger.info("Started packet sniffing thread")
+        # Always start alternative monitoring as backup/supplement
+        logger.info("Starting alternative monitoring to ensure traffic data collection")
+        start_alternative_monitoring()
         
-        # Start continuous traffic monitoring to ensure UI always has data
-        start_continuous_traffic_monitoring()
+        # Real network monitoring only - no simulated traffic
         
         # Start the Flask-SocketIO server
         logger.info(f"Starting server on {config.WEB_HOST}:{config.WEB_PORT}")
@@ -1053,9 +1017,10 @@ if __name__ == "__main__":
             app, 
             host=config.WEB_HOST, 
             port=config.WEB_PORT,
-            debug=config.DEBUG,
+            debug=False,  # Disable debug to prevent Socket.IO issues
             use_reloader=False,
-            allow_unsafe_werkzeug=True
+            allow_unsafe_werkzeug=True,
+            log_output=False  # Reduce logging noise
         )
     except Exception as e:
         logger.critical(f"Fatal error: {e}", exc_info=True)

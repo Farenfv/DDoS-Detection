@@ -132,7 +132,10 @@
                 reconnectionAttempts: globalState.maxReconnectAttempts,
                 reconnectionDelay: 1000,
                 reconnectionDelayMax: 5000,
-                timeout: 20000
+                timeout: 20000,
+                transports: ['polling', 'websocket'],  // Try polling first
+                upgrade: true,
+                forceNew: true  // Force new connection
             });
             
             // Update global reference
@@ -150,6 +153,13 @@
                 if (window.showSuccessNotification) {
                     window.showSuccessNotification('WebSocket connection established successfully!');
                 }
+                
+                // Emit system stats periodically (every 5 seconds to reduce noise)
+                setInterval(() => {
+                    if (socket && socket.connected) {
+                        socket.emit('get_system_stats');
+                    }
+                }, 5000);
                 
                 // Request initial data
                 socket.emit('get_initial_data');
@@ -378,12 +388,7 @@
             try {
                 console.log('Received initial data:', data);
                 
-                // Show success notification
-                if (window.showSuccessNotification) {
-                    window.showSuccessNotification('Initial data received from server!');
-                }
-                
-                // Process traffic updates
+                // Process traffic updates to populate chart
                 if (data.traffic && Array.isArray(data.traffic)) {
                     console.log(`Processing ${data.traffic.length} initial traffic updates`);
                     data.traffic.forEach(update => {
@@ -404,11 +409,6 @@
                 }
             } catch (e) {
                 console.error('Error handling initial data:', e);
-                
-                // Show failure notification
-                if (window.showFailureNotification) {
-                    window.showFailureNotification('Error processing initial data. Check console for details.');
-                }
             }
         }
         

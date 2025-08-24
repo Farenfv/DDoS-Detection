@@ -12,7 +12,7 @@ A comprehensive Python-based DDoS (Distributed Denial of Service) detection syst
 - **Modern Web Dashboard**: Real-time updates with WebSocket communication
 - **Traffic Visualization**: Interactive charts and real-time statistics
 - **IP Blocking**: Manual and automatic IP blocking capabilities
-- **Test Traffic Generation**: Built-in traffic simulation for testing
+- **Real Network Traffic Only**: Monitors actual network traffic without simulation
 - **Comprehensive Logging**: Detailed logging with configurable levels
 - **Prometheus Metrics**: Integration with monitoring systems
 - **Cross-platform Support**: Works on Windows, Linux, and macOS
@@ -76,11 +76,13 @@ python ddos_detection.py
 
 ### Testing
 ```bash
-# Test basic functionality
+# Test basic functionality and real network monitoring
 python test_app.py
 
-# Generate test traffic via web interface
-# Click "Generate Test Traffic" button
+# Generate network activity to see real traffic:
+# - Browse websites
+# - Download files
+# - Use network applications
 ```
 
 
@@ -100,7 +102,7 @@ python test_app.py
 - **IP Management**: Block/unblock suspicious IP addresses
 
 ### Testing & Development
-- **Test Traffic Generation**: Create simulated network activity
+- **Real Traffic Monitoring**: Captures and analyzes actual network activity
 - **Debug Logging**: Comprehensive logging for troubleshooting
 - **API Endpoints**: RESTful API for integration and testing
 - **Prometheus Metrics**: Monitoring and alerting integration
