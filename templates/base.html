@@ -170,6 +170,7 @@
             socket.on('traffic_update', handleTrafficUpdate);
             socket.on('system_stats', handleSystemStats);
             socket.on('initial_data', handleInitialData);
+            socket.on('ip_blocked', handleIPBlocked);
             socket.on('error', handleError);
 
             // Connection lost
@@ -388,7 +389,7 @@
             try {
                 console.log('Received initial data:', data);
                 
-                // Process traffic updates to populate chart
+                // Process traffic updates to populate chart AND connections table
                 if (data.traffic && Array.isArray(data.traffic)) {
                     console.log(`Processing ${data.traffic.length} initial traffic updates`);
                     data.traffic.forEach(update => {
@@ -407,8 +408,44 @@
                 } else {
                     console.log('No initial stats received');
                 }
+                
+                // Force update connections table after processing initial data
+                if (window.renderConnectionsTable) {
+                    setTimeout(() => {
+                        window.renderConnectionsTable();
+                        console.log('Forced connections table update after initial data');
+                    }, 100);
+                }
             } catch (e) {
                 console.error('Error handling initial data:', e);
+            }
+        }
+        
+        function handleIPBlocked(data) {
+            try {
+                console.log('IP blocked event:', data);
+                
+                // Update blocked IPs counter in UI
+                const blockedIpsElement = document.getElementById('blocked-ips');
+                if (blockedIpsElement && data.blocked_count !== undefined) {
+                    blockedIpsElement.textContent = data.blocked_count;
+                    console.log(`Updated blocked IPs counter to: ${data.blocked_count}`);
+                }
+                
+                // Show notification
+                if (window.showSuccessNotification) {
+                    window.showSuccessNotification(`IP ${data.ip} has been blocked! Total blocked: ${data.blocked_count}`);
+                }
+                
+                // Remove from connections table if it exists
+                if (window.connections && window.connections.has(data.ip)) {
+                    window.connections.delete(data.ip);
+                    if (window.renderConnectionsTable) {
+                        window.renderConnectionsTable();
+                    }
+                }
+            } catch (e) {
+                console.error('Error handling IP blocked event:', e);
             }
         }
         

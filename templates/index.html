@@ -96,7 +96,7 @@
                 <h3 class="text-lg font-medium">Active Connections</h3>
                 <div class="flex items-center space-x-4">
                     <div class="text-sm text-gray-500">
-                        <span id="active-connections">0</span> active connections
+                        <span id="active-connections-table">0</span> active connections
                     </div>
                     <button id="clear-traffic-btn" onclick="clearTraffic()" class="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded text-sm">
                         Clear Traffic
@@ -173,7 +173,15 @@ function initializeCharts() {
                 y: {
                     beginAtZero: true,
                     grid: { display: true, drawBorder: false },
-                    ticks: { precision: 0 }
+                    ticks: { 
+                        precision: 1,
+                        stepSize: 0.1,
+                        callback: function(value) {
+                            return value.toFixed(1) + ' req/s';
+                        }
+                    },
+                    min: 0,
+                    suggestedMax: 1
                 },
                 x: {
                     grid: { display: false, drawBorder: false }
@@ -222,13 +230,25 @@ window.handleSystemStats = function(data) {
             return;
         }
         console.log('Updating stats with data:', data);
+        
+        // Update the stats card with server data if available, otherwise use client data
+        const serverConnections = typeof data.active_connections !== 'undefined' ? data.active_connections : connections.size;
+        
+        // Update both the stats card and table header with the same value
+        const statsCardElement = document.getElementById('active-connections');
+        const tableHeaderCount = document.getElementById('active-connections-table');
+        
+        if (statsCardElement) {
+            statsCardElement.textContent = serverConnections;
+        }
+        if (tableHeaderCount) {
+            tableHeaderCount.textContent = serverConnections;
+        }
+        
+        // Update other stats
         updateStats(data);
         
-        // Also update the active connections count in the table header
-        const tableHeaderCount = document.querySelector('#active-connections');
-        if (tableHeaderCount && typeof data.active_connections !== 'undefined') {
-            tableHeaderCount.textContent = data.active_connections;
-        }
+        console.log(`Updated both displays with ${serverConnections} active connections`);
     } catch (e) {
         console.error('Error handling system stats:', e);
     }
@@ -239,19 +259,33 @@ function updateTrafficChart(data) {
     if (!trafficChart) {
         console.warn('Chart not initialized, reinitializing...');
         initializeCharts();
-        if (!trafficChart) return;
+        if (!trafficChart) {
+            console.error('Failed to initialize chart');
+            return;
+        }
     }
     
     const now = new Date();
     const timeLabel = now.toLocaleTimeString();
+    const requestRate = parseFloat(data.request_rate) || 0;
     
-    // Add new data point
-    trafficData.push({
+    // Ensure we have a valid rate to display
+    if (requestRate === 0 && data.request_count > 0) {
+        // Calculate rate if not provided but we have request count
+        const calculatedRate = data.request_count / 10; // Assume 10 second window
+        console.log(`Calculated rate: ${calculatedRate} from count: ${data.request_count}`);
+    }
+    
+    // Add new data point with proper rate - only if we have actual traffic
+    const actualRate = requestRate > 0 ? requestRate : 0;
+    const dataPoint = {
         time: timeLabel,
-        rate: data.request_rate || 0,
+        rate: actualRate, // Use actual rate, don't artificially inflate
         ip: data.ip,
         timestamp: data.timestamp
-    });
+    };
+    
+    trafficData.push(dataPoint);
     
     // Keep only the last MAX_DATA_POINTS
     if (trafficData.length > MAX_DATA_POINTS) {
@@ -262,11 +296,12 @@ function updateTrafficChart(data) {
     trafficChart.data.labels = trafficData.map(d => d.time);
     trafficChart.data.datasets[0].data = trafficData.map(d => d.rate);
     
-    // Force chart update with animation disabled for better performance
-    trafficChart.update('none');
+    // Force chart update with animation
+    trafficChart.update('active');
     
-    console.log(`Chart updated: ${data.ip} - ${data.request_rate} req/s`);
-    console.log(`Chart now has ${trafficData.length} data points`);
+    console.log(`Chart updated: ${data.ip} - ${requestRate} req/s (displayed as ${dataPoint.rate})`);
+    console.log(`Chart now has ${trafficData.length} data points:`, trafficData.map(d => d.rate));
+    console.log('Chart Y-axis max:', Math.max(...trafficData.map(d => d.rate)));
 }
 
 // Update connections table
@@ -332,9 +367,17 @@ function renderConnectionsTable() {
 // Update the active connections count
 function updateActiveConnectionsCount() {
     const countElement = document.getElementById('active-connections');
+    const tableCountElement = document.getElementById('active-connections-table');
+    const currentCount = connections.size;
+    
     if (countElement) {
-        countElement.textContent = connections.size;
+        countElement.textContent = currentCount;
     }
+    if (tableCountElement) {
+        tableCountElement.textContent = currentCount;
+    }
+    
+    console.log(`Updated both connection displays to: ${currentCount}`);
 }
 
 // Initialize connections map if it doesn't exist
@@ -342,58 +385,58 @@ if (!window.connections) {
     window.connections = new Map();
 }
 
-// Update stats cards
+// Update stats display
 function updateStats(stats = {}) {
     try {
-        // Calculate total traffic from connections
+        // Calculate total traffic from all connections
         let totalTraffic = 0;
-        if (window.connections && window.connections.size > 0) {
-            window.connections.forEach(conn => {
-                totalTraffic += parseInt(conn.requestCount || 0);
-            });
-        }
+        let totalThreats = 0;
         
-        // Update UI elements if they exist
-        const totalTrafficEl = document.getElementById('total-traffic');
-        if (totalTrafficEl) {
-            totalTrafficEl.textContent = totalTraffic.toLocaleString();
-        }
-        
-        const activeThreatsEl = document.getElementById('active-threats');
-        if (activeThreatsEl) {
-            activeThreatsEl.textContent = window.alertCount || 0;
-        }
-        
-        const blockedIpsEl = document.getElementById('blocked-ips');
-        if (blockedIpsEl) {
-            blockedIpsEl.textContent = (stats && typeof stats.blocked_ips !== 'undefined') ? stats.blocked_ips : 0;
-        }
-        
-        // Update both active connections displays
-        const activeConnections = (stats && typeof stats.active_connections !== 'undefined') 
-            ? stats.active_connections 
-            : (window.connections ? window.connections.size : 0);
-            
-        const activeConnectionsEl = document.getElementById('active-connections');
-        if (activeConnectionsEl) {
-            activeConnectionsEl.textContent = activeConnections;
-        }
-        
-        // Also update the table header count
-        const tableHeaderCount = document.querySelector('#active-connections');
-        if (tableHeaderCount) {
-            tableHeaderCount.textContent = activeConnections;
-        }
-        
-        console.log('Updated stats:', { 
-            totalTraffic, 
-            alertCount: window.alertCount || 0, 
-            blockedIps: (stats && typeof stats.blocked_ips !== 'undefined') ? stats.blocked_ips : 0,
-            activeConnections
+        connections.forEach((connStats, ip) => {
+            totalTraffic += connStats.requestCount;
+            // Simple threat detection based on high request rate
+            if (connStats.requestRate > 50) {
+                totalThreats++;
+            }
         });
         
-    } catch (e) {
-        console.error('Error in updateStats:', e);
+        // Update display elements
+        const totalTrafficElement = document.getElementById('total-traffic');
+        const activeThreatsElement = document.getElementById('active-threats');
+        const activeConnectionsElement = document.getElementById('active-connections');
+        
+        if (totalTrafficElement) {
+            totalTrafficElement.textContent = totalTraffic.toLocaleString();
+        }
+        
+        if (activeThreatsElement) {
+            activeThreatsElement.textContent = totalThreats;
+        }
+        
+        if (activeConnectionsElement) {
+            activeConnectionsElement.textContent = connections.size;
+        }
+        
+        // Update blocked IPs if we have the data
+        const blockedIpsElement = document.getElementById('blocked-ips');
+        if (blockedIpsElement) {
+            const blockedCount = typeof stats.blocked_ips !== 'undefined' ? stats.blocked_ips : 0;
+            blockedIpsElement.textContent = blockedCount;
+            console.log(`Updated blocked IPs display to: ${blockedCount}`);
+            
+            // Force update if we have server data
+            if (typeof stats.blocked_ips !== 'undefined') {
+                console.log(`Forced blocked IPs update from server data: ${stats.blocked_ips}`);
+            }
+        }
+        
+        // Also update the connections count in the table section
+        updateActiveConnectionsCount();
+        
+        console.log(`Stats updated - Traffic: ${totalTraffic}, Threats: ${totalThreats}, Connections: ${connections.size}`);
+        
+    } catch (error) {
+        console.error('Error updating stats:', error);
     }
 }
 
